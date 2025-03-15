@@ -1,7 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"github.com/chaithanyaKS/db-backend/server"
+)
 
 func main() {
-	fmt.Println("Hi")
+	server := server.New("localhost", 5555)
+	server.ListenAndServe()
 }
