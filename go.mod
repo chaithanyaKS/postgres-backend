@@ -1,3 +1,3 @@
-module github.com/chaithanyaKS/db-backend
+module github.com/chaithanyaKS/postgres-backend
 
 go 1.24.1

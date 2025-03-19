@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/chaithanyaKS/db-backend/server"
+	"github.com/chaithanyaKS/postgres-backend/server"
 )
 
 func main() {

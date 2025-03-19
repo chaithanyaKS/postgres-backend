@@ -62,27 +62,46 @@ func (s *Server) handleConnections(conn net.Conn) {
 		return
 	}
 }
+func sendCommandComplete(conn net.Conn, commandTag string) {
+	// 'C' + length + commandTag
+	message := make([]byte, 5+len(commandTag)+1)
+	message[0] = 'C' // CommandComplete identifier
+
+	// Message length (including itself)
+	binary.BigEndian.PutUint32(message[1:], uint32(4+len(commandTag)+1))
+
+	// Copy the commandTag string (e.g., "SET") + null terminator
+	copy(message[5:], commandTag)
+	message[5+len(commandTag)] = 0
+
+	// Send message
+	_, err := conn.Write(message)
+	if err != nil {
+		slog.Error("Failed to send CommandComplete", "err", err)
+	}
+	slog.Info("Sent CommandComplete", "command", commandTag)
+}
 
 func (s *Server) handleQuery(conn net.Conn) error {
+	slog.Info("Inside handleQuery, waiting for message")
 
-	buf := make([]byte, 1024)
-	reader := bufio.NewReaderSize(conn, 8)
+	for {
+		buf := make([]byte, 1024)
+		reader := bufio.NewReaderSize(conn, 8)
 
-	n, err := reader.Read(buf)
-	slog.Info("Bytes read", "len", n)
-	if err != nil {
-		slog.Error("Error while reading data", "err", err)
-		return err
+		n, err := reader.Read(buf)
+		slog.Info("Bytes read", "len", n)
+		slog.Info("Bytes read", "data", buf[:n])
+
+		sendCommandComplete(conn, "SET")
+
+		// Send ReadyForQuery ('Z')
+		conn.Write([]byte{'Z', 0, 0, 0, 5, 'I'})
+		if err != nil {
+			slog.Error("Error while reading data", "err", err)
+			return err
+		}
 	}
-	// scanner := bufio.NewScanner(conn)
-	// for scanner.Scan() {
-	// 	data := scanner.Bytes()
-	//
-	// 	slog.Info("Received query", "query", data)
-	// 	conn.Write([]byte("ReadyForQuery"))
-	// 	slog.Info("ReadyForQuery Sent inside handleQuery method")
-	// }
-	return nil
 }
 
 func (s *Server) startUp(conn net.Conn) error {
@@ -137,11 +156,72 @@ func (s *Server) performAuthentication(conn net.Conn) error {
 	return nil
 }
 
+func sendParameterStatus(conn net.Conn, key, value string) {
+	message := make([]byte, 5+len(key)+1+len(value)+1) // S + length + key + 0 + value + 0
+	message[0] = 'S'                                   // Message type 'S'
+
+	// Message length (big-endian)
+	binary.BigEndian.PutUint32(message[1:], uint32(len(message)))
+
+	// Copy key=value into message
+	copy(message[5:], key)
+	message[5+len(key)] = 0
+	copy(message[6+len(key):], value)
+	message[len(message)-1] = 0
+
+	slog.Info("Parameter Status", "message", message)
+
+	// Send message
+	conn.Write(message)
+}
+
+func sendBackendKeyData(conn net.Conn, processID, secretKey int32) error {
+	// Create the message buffer (1 byte for 'K' + 4 bytes for length + 4 bytes PID + 4 bytes SecretKey)
+	message := make([]byte, 13)
+	message[0] = 'K' // Message type 'K'
+
+	// Set message length (12 bytes: 4-byte PID + 4-byte secretKey + 4-byte length field itself)
+	binary.BigEndian.PutUint32(message[1:], uint32(12))
+
+	// Set process ID (PID)
+	binary.BigEndian.PutUint32(message[5:], uint32(processID))
+
+	// Set secret key
+	binary.BigEndian.PutUint32(message[9:], uint32(secretKey))
+
+	// Send the message
+	_, err := conn.Write(message)
+	if err != nil {
+		slog.Error("Failed to send BackendKeyData", "err", err)
+		return err
+	}
+
+	slog.Info("Sent BackendKeyData", "PID", processID, "SecretKey", secretKey)
+	return nil
+}
+
 func (s *Server) initializeSession(conn net.Conn) error {
+
+	sendParameterStatus(conn, "server_version", "15.0")
+	sendParameterStatus(conn, "client_encoding", "UTF8")
+	sendParameterStatus(conn, "server_encoding", "UTF8")
+	sendParameterStatus(conn, "is_superuser", "false")
+	sendParameterStatus(conn, "session_authorization", "postgres")
+
+	slog.Info("ParameterStatus Sent")
+	processID := int32(12345) // Fake Process ID
+	secretKey := int32(67890)
+
+	sendBackendKeyData(conn, processID, secretKey)
+
+	slog.Info("BackendKeyData Sent")
+
 	resBuf := new(bytes.Buffer)
 	resBuf.WriteByte('Z')
-	binary.Write(resBuf, binary.BigEndian, int32(5))
+	binary.Write(resBuf, binary.BigEndian, uint32(5))
+	resBuf.WriteByte('I')
 	conn.Write(resBuf.Bytes())
+
 	slog.Info("ReadyForQuery Sent")
 
 	return nil
